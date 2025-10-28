@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Foto → Frågor (ADHD‑vänlig)</title>
+  <style>
+    :root { --gap: 12px; --radius: 14px; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif; margin: 0; padding: 16px; background: #fafafa; color: #111; }
+    .app { max-width: 820px; margin: 0 auto; display: grid; gap: var(--gap); }
+    header { position: sticky; top: 0; background: #fafafaee; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); padding-bottom: 8px; z-index: 5; }
+    h1 { font-size: 1.35rem; margin: 0 0 6px; }
+    .card { background: white; border: 1px solid #eee; border-radius: var(--radius); padding: 14px; box-shadow: 0 8px 20px rgba(0,0,0,0.04); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    label { font-weight: 600; font-size: .95rem; }
+    input[type="file"], input[type="number"], input[type="checkbox"], input[type="password"], button, textarea { font: inherit; }
+    input[type="number"], input[type="password"] { width: 90px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 10px; }
+    textarea { width: 100%; min-height: 120px; padding: 10px; border-radius: 12px; border: 1px solid #eee; background: #fcfcfc; }
+    .hint { color: #666; font-size: .9rem; }
+    .btn { appearance: none; border: 1px solid #111; background: #111; color: white; padding: 10px 14px; border-radius: 999px; cursor: pointer; transition: .2s; font-weight: 600; }
+    .btn[disabled] { opacity: .5; cursor: not-allowed; }
+    .btn.outline { background: white; color: #111; }
+    .pill { padding: 6px 10px; border-radius: 999px; border: 1px solid #eee; background: #f6f6f6; font-size: .85rem; }
+    .progress { height: 10px; background: #eee; border-radius: 999px; overflow: hidden; }
+    .progress > div { height: 100%; width: 0%; background: #111; transition: width .25s ease; }
+    .question { font-size: 1.15rem; margin-bottom: 10px; }
+    .options { display: grid; gap: 8px; }
+    .option { border: 1px solid #ddd; background: #fff; padding: 12px; border-radius: 12px; text-align: left; cursor: pointer; }
+    .option.correct { outline: 2px solid #0a0; background: #f1fff1; }
+    .option.incorrect { outline: 2px solid #c00; background: #fff0f0; }
+    .why { margin-top: 10px; font-size: .95rem; color: #333; background: #f7f7f7; border: 1px solid #eee; border-radius: 12px; padding: 10px; }
+    .muted { color: #777; }
+    .stack { display: grid; gap: 8px; }
+    .spacer { height: 6px; }
+    .small { font-size: .85rem; }
+    .hide { display:none; }
+    .grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    footer { color: #777; font-size: .85rem; text-align: center; margin-top: 10px; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 2px 6px; border: 1px solid #ccc; border-radius: 6px; background: #f9f9f9; }
+  </style>
+  <!-- Tesseract.js for client-side OCR -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js">// === Spaced Repetition (lokalt) ===
+let deck = loadDeck();
+let reviewQueue = []; let iR = 0;
+
+function qKey(q){
+  let h = 0; const s = (q?.q||'') + '|' + (q?.options?.join('||')||'');
+  for (let i=0;i<s.length;i++){ h = ((h<<5)-h) + s.charCodeAt(i); h|=0; }
+  return 'q'+Math.abs(h);
+}
+function loadDeck(){ try { return JSON.parse(localStorage.getItem('srDeckV1')||'{}'); } catch { return {}; } }
+function saveDeck(){ try { localStorage.setItem('srDeckV1', JSON.stringify(deck)); } catch {} }
+function addToDeck(q){ const id = qKey(q); if (!deck[id]) deck[id] = { q, bucket:1, next: Date.now() }; saveDeck(); }
+function updateDeckForAnswer(q, correct){
+  const id = qKey(q); if (!deck[id]) addToDeck(q);
+  const item = deck[id];
+  item.bucket = correct ? Math.min((item.bucket||1)+1, 5) : 1;
+  const intervals = {1: 0, 2: 6*3600e3, 3: 24*3600e3, 4: 3*24*3600e3, 5: 7*24*3600e3};
+  item.next = Date.now() + intervals[item.bucket];
+  saveDeck();
+}
+function getDueQuestions(limit=Infinity){
+  const now = Date.now();
+  const due = Object.values(deck).filter(it => (it.next||0) <= now).map(it => it.q);
+  return due.slice(0, isFinite(limit)?limit:due.length);
+}
+function refreshDuePill(){
+  try {
+    const n = getDueQuestions().length;
+    const el = document.getElementById('duePill');
+    if (el) el.textContent = `${n} att repetera`;
+    const cp = document.getElementById('controlPill');
+    if (cp){
+      let msg = '';
+      if (n === 0) msg = 'Allt klart ✅';
+      else if (n <= 4) msg = 'Under kontroll 🟢';
+      else if (n <= 15) msg = 'Bra fart 🔵';
+      else msg = 'Fokusläge 🟠';
+      cp.textContent = msg;
+    }
+  } catch {}
+} att repetera`; } catch {}
+}
+
+// Review UI
+const reviewBtn = document.getElementById('reviewBtn');
+const reviewCard = document.getElementById('reviewCard');
+const reviewCountPill = document.getElementById('reviewCountPill');
+const reviewBar = document.getElementById('reviewBar');
+const reviewExit = document.getElementById('reviewExit');
+const rText = document.getElementById('rText');
+const rOpts = document.getElementById('rOpts');
+const rWhy = document.getElementById('rWhy');
+const rWhyBtn = document.getElementById('rWhyBtn');
+const rNextBtn = document.getElementById('rNextBtn');
+
+function startReviewSession(limit=Infinity){
+  reviewQueue = getDueQuestions(limit);
+  if (!reviewQueue.length){ alert('Inget att repetera just nu. Svara på några frågor först.'); return; }
+  iR = 0;
+  reviewCard.classList.remove('hide');
+  renderReviewQuestion();
+}
+function renderReviewQuestion(){
+  const q = reviewQueue[iR];
+  rText.textContent = q.q;
+  rOpts.innerHTML = '';
+  rWhy.textContent = q.why || '';
+  rWhy.classList.add('hide');
+  rNextBtn.disabled = true; rNextBtn.textContent='Nästa';
+  const pct = (iR / reviewQueue.length) * 100;
+  reviewBar.style.width = pct + '%';
+  reviewCountPill.textContent = `${iR+1}/${reviewQueue.length}`;
+
+  q.options.forEach((optText, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'option';
+    btn.textContent = optText;
+    btn.addEventListener('click', () => {
+      const correct = idx === q.answerIndex;
+      btn.classList.add(correct ? 'correct' : 'incorrect');
+      Array.from(rOpts.children).forEach(b=> b.disabled = true);
+      try { updateDeckForAnswer(q, correct); refreshDuePill(); refreshMoreBtn && refreshMoreBtn(); try { document.getElementById('streakPillR').textContent = `🔥 ${streak}`; } catch{}(); } catch(e){}
+      rNextBtn.disabled = false;
+    });
+    rOpts.appendChild(btn);
+  });
+}
+
+reviewBtn?.addEventListener('click', ()=> startReviewSession());
+reviewExit?.addEventListener('click', ()=> { reviewCard.classList.add('hide'); });
+rWhyBtn?.addEventListener('click', ()=> rWhy.classList.toggle('hide'));
+rNextBtn?.addEventListener('click', ()=>{ iR++; if (iR>=reviewQueue.length){ rText.textContent=`Repetition klar! 👍  (Rätt idag: ${window._reviewCorrect||0}/${reviewQueue.length})`; rOpts.innerHTML=''; rWhy.classList.add('hide'); rNextBtn.disabled=true; rNextBtn.textContent='Slut'; reviewBar.style.width='100%'; reviewCountPill.textContent=`${reviewQueue.length}/${reviewQueue.length}`; refreshDuePill(); refreshMoreBtn && refreshMoreBtn(); saveDeck(); return;} renderReviewQuestion(); });
+
+// init counter on load
+refreshDuePill(); refreshMoreBtn && refreshMoreBtn();
+function refreshMoreBtn(){ try{ const btn=document.getElementById('moreBtn'); if(!btn) return; const vals=Object.values(deck||{}); if(!vals.length){ btn.disabled=true; return;} const strong=vals.filter(it=>(it.bucket||1)>=4).length; const mastery=strong/vals.length; btn.disabled = !(mastery>=0.75); }catch{} }
+refreshMoreBtn && refreshMoreBtn();
+</script>
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <div class="app">
+    <header>
+
+<!-- INTRO CARD -->
+<section class="card" id="introCard">
+  <h2 style="margin-top:0;">Hur du använder appen 🌱</h2>
+  <ul class="small" style="line-height:1.5; padding-left:18px; margin-top:4px;">
+    <li>Fota 1–2 sidor ur boken.</li>
+    <li>Tryck <b>Skapa frågor</b>.</li>
+    <li>Svara på frågorna en i taget.</li>
+    <li>Tryck <b>Starta repetition</b> senare för att komma ihåg över tid.</li>
+  </ul>
+  <p class="small muted">Du kan sluta när som helst. Appen minns åt dig.</p>
+  <button class="btn" id="introClose">Jag förstår</button>
+</section>
+
+      <h1>Foto → Frågor • superenkel</h1>
+      <div class="hint">Ta foto på 1–2 sidor → skapa <b>5–7 frågor per foto</b> → quiz med förklaringar. Allt i en fil.</div>
+    </header>
+
+    <!-- STEP 1: INPUTS -->
+    <section class="card" id="inputCard">
+      <div class="stack">
+        <div class="row">
+          <div class="stack" style="flex: 1">
+            <label for="file">1) Välj/fota sida (1–3 bilder)</label>
+            <input id="file" type="file" accept="image/*" capture="environment" multiple />
+            <div class="hint">Tips: Fota rakt ovanifrån och bra ljus för bäst OCR.</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="stack">
+            <label for="qPer">2) Frågor per foto</label>
+            <input id="qPer" type="number" min="3" max="10" value="6" />
+          </div>
+          <label class="row" style="gap:6px; align-items:center;">
+            <input id="autoScale" type="checkbox" checked /> Auto‑skala efter antal foton
+          </label>
+          <span class="pill" id="photosPill">0 foton</span>
+        </div>
+
+        <div class="row">
+          <div class="stack" style="flex:1; min-width:220px;">
+            <label for="apiKey">LLM API‑nyckel</label>
+            <input id="apiKey" type="password" placeholder="klistra in nyckel…" />
+            <div class="hint small">Nyckeln lagras lokalt på enheten (localStorage). Inget skickas någon annanstans.</div>
+          </div>
+          <div class="stack" style="min-width:220px;">
+            <label for="provider">Leverantör & modell</label>
+            <div class="row">
+              <select id="provider" style="padding:8px;border:1px solid #ddd;border-radius:10px;">
+                <option value="openai" selected>OpenAI‑kompatibel</option>
+              </select>
+              <input id="model" type="text" value="gpt-4o-mini" style="flex:1;padding:8px;border:1px solid #ddd;border-radius:10px;" />
+            </div>
+            <div class="hint small">Fungerar med OpenAI‑kompatibla API:er. Byt modellnamn vid behov.</div>
+          </div>
+          <div class="stack" style="align-self:flex-end;">
+            <button class="btn" id="btnProcess">Skapa frågor</button>
+            <button class="btn outline small" id="offlineBtn">Aktivera offline (Spara som paket)</button>
+          </div>
+        </div>
+
+        <details>
+          <summary class="muted small">Visa OCR‑text (felsökning)</summary>
+          <textarea id="ocrOut" readonly></textarea>
+        </details>
+      </div>
+    </section>
+
+    <!-- STEP 2: QUIZ -->
+    <section class="card hide" id="quizCard">
+      <div class="row" style="justify-content:space-between; align-items:center;">
+        <div class="row" style="gap:8px; align-items:center;">
+          <span class="pill" id="countPill">0/0</span>
+          <span class="pill" id="scorePill">0 poäng</span>
+          <span class="pill" id="streakPill">🔥 0</span>
+        </div>
+        <div class="row" style="gap:8px;">
+          <button class="btn outline small" id="ttsBtn" title="Läs upp frågan">🔊 Läs upp</button>
+          <button class="btn outline small" id="restartBtn">↺ Börja om</button>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+      <div class="progress"><div id="bar"></div></div>
+      <div class="spacer"></div>
+
+      <div id="qView" class="stack">
+        <div class="question" id="qText">Frågetext…</div>
+        <div class="options" id="opts"></div>
+        <div class="why hide" id="whyBox"></div>
+        <div class="row" style="justify-content:space-between;">
+          <button class="btn outline" id="whyBtn">Varför?</button>
+          <button class="btn" id="nextBtn" disabled>Nästa</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 2b: REVIEW INTRO -->
+    <section class="card" id="reviewIntro">
+      <div class="row" style="justify-content:space-between; align-items:center;">
+        <div class="row" style="gap:8px; align-items:center;">
+          <button class="btn outline" id="reviewBtn" title="Starta repetition (förfallna frågor)">🔁 Starta repetition</button>
+          <span class="pill" id="duePill">0 att repetera</span>
+          <span class="pill" id="controlPill">Under kontroll</span>
+        </div>
+        <div class="small muted">Repetition visar automatiskt sådant som är förfallet. Du kan avsluta när som helst.</div>
+      </div>
+    </section>
+
+    <!-- STEP 3: REVIEW SESSION -->
+    <section class="card hide" id="reviewCard">
+      <div class="row" style="justify-content:space-between; align-items:center;">
+        <div class="row" style="gap:8px; align-items:center;">
+          <span class="pill" id="reviewCountPill">0/0</span>
+          <span class="pill" id="streakPillR">🔥 0</span>
+        </div>
+        <div class="row" style="gap:8px;">
+          <button class="btn outline small" id="reviewExit">Avsluta</button>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="progress"><div id="reviewBar"></div></div>
+      <div class="spacer"></div>
+      <div id="rView" class="stack">
+        <div class="question" id="rText">Frågetext…</div>
+        <div class="options" id="rOpts"></div>
+        <div class="why hide" id="rWhy"></div>
+        <div class="row" style="justify-content:space-between;">
+          <button class="btn outline" id="rWhyBtn">Varför?</button>
+          <button class="btn" id="rNextBtn" disabled>Nästa</button>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      Gjord för att minimera friktion: <span class="kbd">foto</span> → <span class="kbd">frågor</span> → <span class="kbd">quiz</span>. 1 fråga i taget. Direkt feedback.
+    </footer>
+  </div>
+
+<script>
+// PWA/Offline: register service worker
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  });
+}
+
+const fileInput = document.getElementById('file');
+const photosPill = document.getElementById('photosPill');
+const qPer = document.getElementById('qPer');
+const autoScale = document.getElementById('autoScale');
+const apiKeyEl = document.getElementById('apiKey');
+const providerEl = document.getElementById('provider');
+const modelEl = document.getElementById('model');
+const offlineBtn = document.getElementById('offlineBtn');
+const btnProcess = document.getElementById('btnProcess');
+const ocrOut = document.getElementById('ocrOut');
+const inputCard = document.getElementById('inputCard');
+const quizCard = document.getElementById('quizCard');
+const qText = document.getElementById('qText');
+const opts = document.getElementById('opts');
+const whyBox = document.getElementById('whyBox');
+const whyBtn = document.getElementById('whyBtn');
+const nextBtn = document.getElementById('nextBtn');
+const bar = document.getElementById('bar');
+const countPill = document.getElementById('countPill');
+const scorePill = document.getElementById('scorePill');
+const ttsBtn = document.getElementById('ttsBtn');
+const restartBtn = document.getElementById('restartBtn');
+
+let images = [];
+// restore saved api key & settings
+(function(){
+  try{
+    const saved = JSON.parse(localStorage.getItem('llmSettings')||'{}');
+    if (saved.apiKey) apiKeyEl.value = saved.apiKey;
+    if (saved.provider) providerEl.value = saved.provider;
+    if (saved.model) modelEl.value = saved.model;
+  }catch{}
+})();
+let questions = [];
+let iQ = 0;
+let score = 0;
+let streak = 0;
+
+fileInput.addEventListener('change', () => {
+  images = Array.from(fileInput.files || []);
+  photosPill.textContent = `${images.length} foto${images.length===1?'':'n'}`;
+});
+
+restartBtn.addEventListener('click', () => {
+  questions = [];
+  iQ = 0; score = 0;
+  quizCard.classList.add('hide');
+  inputCard.scrollIntoView({behavior:'smooth'});
+});
+
+ttsBtn.addEventListener('click', () => {
+  const utter = new SpeechSynthesisUtterance(qText.textContent);
+  utter.lang = 'sv-SE';
+  speechSynthesis.cancel();
+  speechSynthesis.speak(utter);
+});
+
+offlineBtn.addEventListener('click', async () => {
+  if (!('serviceWorker' in navigator)) { alert('Din webbläsare stödjer inte offline‑läge.'); return; }
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) {
+      alert('Starta om sidan och testa igen.');
+      return;
+    }
+    // Trigger pre-cache via postMessage
+    reg.active?.postMessage({type:'PRECACHE'});
+    alert('Offline aktiverat. Lägg gärna till på hemskärmen via Safari/Chrome.');
+  } catch(e) {
+    alert('Kunde inte aktivera offline: '+ e.message);
+  }
+});
+
+btnProcess.addEventListener('click', async () => {
+  const countPer = clamp(parseInt(qPer.value||'6',10),3,10);
+  if (!images.length) { alert('Välj minst 1 foto.'); return; }
+
+  btnProcess.disabled = true; btnProcess.textContent = 'Bearbetar…';
+  const text = await ocrAll(images);
+  ocrOut.value = text.slice(0, 100000);
+
+  const totalQ = autoScale.checked ? countPer * images.length : countPer;
+  const apiKey = (apiKeyEl.value||'').trim();
+  const provider = providerEl.value;
+  const model = modelEl.value.trim() || 'gpt-4o-mini';
+  try { localStorage.setItem('llmSettings', JSON.stringify({apiKey, provider, model})); } catch {}
+  questions = apiKey ? await generateQuestionsLLM(text, totalQ, {provider, model, apiKey}) : generateQuestionsFallback(text, totalQ);
+
+  // lägg till i SR-däck
+  try { questions.forEach(q => addToDeck(q)); refreshDuePill(); refreshMoreBtn && refreshMoreBtn(); } catch(e){}
+
+  if (!questions.length) { alert('Misslyckades att skapa frågor. Testa igen eller ange API‑nyckel.'); btnProcess.disabled=false; btnProcess.textContent='Skapa frågor'; return; }
+
+  // Show quiz
+  iQ = 0; score = 0;
+  inputCard.scrollIntoView({behavior:'auto'});
+  quizCard.classList.remove('hide');
+  renderQuestion();
+  btnProcess.disabled=false; btnProcess.textContent='Skapa frågor';
+});
+
+whyBtn.addEventListener('click', () => {
+  whyBox.classList.toggle('hide');
+});
+
+nextBtn.addEventListener('click', () => {
+  iQ++;
+  if (iQ >= questions.length) {
+    qText.textContent = 'Klart! 🎉';
+    opts.innerHTML = '';
+    whyBox.classList.add('hide');
+    nextBtn.disabled = true; nextBtn.textContent = 'Slut';
+    bar.style.width = '100%';
+    countPill.textContent = `${questions.length}/${questions.length}`;
+    return;
+  }
+  renderQuestion();
+});
+
+function renderQuestion(){
+  const q = questions[iQ];
+  qText.textContent = q.q;
+  opts.innerHTML = '';
+  whyBox.textContent = q.why || '';
+  whyBox.classList.add('hide');
+  nextBtn.disabled = true; nextBtn.textContent = 'Nästa';
+  // Progress
+  const pct = (iQ / questions.length) * 100;
+  bar.style.width = pct + '%';
+  countPill.textContent = `${iQ+1}/${questions.length}`;
+  scorePill.textContent = `${score} poäng`;
+      try { document.getElementById('streakPill').textContent = `🔥 ${streak}`; } catch{} `${score} poäng`;
+
+  q.options.forEach((optText, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'option';
+    btn.textContent = optText;
+    btn.addEventListener('click', () => {
+      const correct = idx === q.answerIndex;
+      btn.classList.add(correct ? 'correct' : 'incorrect');
+      // lock others
+      Array.from(opts.children).forEach(b=> b.disabled = true);
+      if (correct) { score++; streak++; } else { streak = 0; }
+      scorePill.textContent = `${score} poäng`;
+      try { updateDeckForAnswer(q, correct); refreshDuePill(); refreshMoreBtn && refreshMoreBtn(); } catch(e){}
+      nextBtn.disabled = false;
+    });
+    opts.appendChild(btn);
+  });
+}
+
+async function ocrAll(files){
+  const worker = await Tesseract.createWorker('swe+eng');
+  let out = '';
+  for (let f of files){
+    const { data: { text } } = await worker.recognize(f);
+    out += '\n\n' + text;
+  }
+  await worker.terminate();
+  return cleanText(out);
+}
+
+function cleanText(t){
+  // Simple cleanup for OCR artifacts
+  return t
+    .replace(/[\u2010-\u2015]/g,'-')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g,'\n\n')
+    .trim();
+}
+
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+async function generateQuestionsLLM(text, totalQ, cfg){
+  const {provider, model, apiKey} = cfg;
+  const chunks = chunkText(text, 1600); // small context chunks
+  const desired = clamp(totalQ, 3, 40);
+  const perChunk = Math.max(1, Math.round(desired / chunks.length));
+  const all = [];
+
+  for (const ch of chunks){
+    const want = Math.min(perChunk, desired - all.length);
+    if (want <= 0) break;
+    const prompt = buildPrompt(ch, want);
+    try {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {role: 'system', content: 'Du skapar kort, tydliga flervalsfrågor på svenska från elevtexter. Du svarar ENDAST med JSON enligt schema.'},
+            {role: 'user', content: prompt}
+          ],
+          temperature: 0.4,
+        })
+      });
+      const data = await resp.json();
+      const content = data.choices?.[0]?.message?.content || '';
+      const parsed = safeParseQuestions(content);
+      if (parsed.length) all.push(...parsed);
+    } catch(e){ console.warn('LLM error', e); }
+  }
+  return all.slice(0, desired);
+}
+
+function buildPrompt(text, n){
+  return `Läs texten nedan. Skapa ${n} flervalsfrågor som testar viktiga fakta/begrepp. Varje fråga ska ha 4 svarsalternativ, exakt ett rätt. Gör distraktorer som är plausibla men fel. Lägg till en kort \"varför\"-förklaring (1–2 meningar) med citatfraser ur texten. Svara i JSON: {\"questions\":[{\"q\",\"options\":[..],\"answerIndex\",\"why\"}]}.\n\nText:\n\n"""${text}"""`;
+}
+
+function safeParseQuestions(s){
+  try {
+    const json = JSON.parse(s.replace(/```json|```/g,''));
+    const qs = Array.isArray(json.questions) ? json.questions : [];
+    return qs.filter(v => v && typeof v.q==='string' && Array.isArray(v.options) && v.options.length===4 && Number.isInteger(v.answerIndex));
+  } catch(e) {
+    // Attempt to find JSON substring
+    const m = s.match(/\{[\s\S]*\}/);
+    if (m) {
+      try { return safeParseQuestions(m[0]); } catch(e2) {}
+    }
+    return [];
+  }
+}
+
+function generateQuestionsFallback(text, totalQ){
+  // Very simple offline generator: picks sentences and makes one correct + 3 shuffled distractors from other sentences.
+  const sentences = text
+    .split(/(?<=[\.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length>20 && s.length<200);
+  const N = Math.min(totalQ, Math.max(3, Math.floor(sentences.length/3)));
+  const qs = [];
+  for (let i=0; i<N; i++){
+    const idx = i % sentences.length;
+    const correct = sentences[idx];
+    const q = makeBasicQuestion(correct);
+    // Options from other sentences (rough, but avoids emptiness)
+    const pool = pickMany(sentences.filter((_,j)=> j!==idx), 10).map(s => trimTo(s, 80));
+    const distractors = uniqueStrings(pool).slice(0,3);
+    const options = shuffle([q.correct, ...distractors]);
+    qs.push({ q: q.q, options, answerIndex: options.indexOf(q.correct), why: `Ur texten: "${trimTo(correct, 140)}"`});
+  }
+  return qs;
+}
+
+function makeBasicQuestion(sentence){
+  // Heuristic: turn a definition-like sentence into a question.
+  // Example: "Fotosyntes är processen där växter ..." -> "Vad är fotosyntes?"
+  const s = sentence;
+  const m = s.match(/^([A-ZÅÄÖa-zåäö0-9\- ]{3,45})\s+är\s+/);
+  if (m) {
+    const term = m[1].trim().replace(/\s+/g, ' ');
+    return { q: `Vad är ${term.toLowerCase()}?`, correct: trimTo(s.replace(/^[^\u00A0]*?är\s+/,'').replace(/\s+/g,' '), 80) };
+  }
+  // Else fallback to fill-in-the-blank style
+  const words = s.split(/\s+/);
+  const idx = Math.max(3, Math.min(words.length-3, Math.floor(words.length/2)));
+  const answer = words[idx].replace(/[\.,;:!?]$/,'');
+  const q = `Fyll i meningen: ${trimTo(words.slice(0, idx).join(' '), 60)} __ ${trimTo(words.slice(idx+1).join(' '), 60)}`;
+  return { q, correct: answer };
+}
+
+function trimTo(s, n){ return s.length>n ? s.slice(0,n-1)+'…' : s; }
+function shuffle(arr){ return arr.map(v=>[Math.random(),v]).sort((a,b)=>a[0]-b[0]).map(v=>v[1]); }
+function pickMany(arr, k){ return shuffle(arr).slice(0,k); }
+function uniqueStrings(arr){
+  const seen = new Set();
+  return arr.filter(s=>{ const key=s.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; });
+}
+
+function chunkText(t, max){
+  const paras = t.split(/\n+/).map(p=>p.trim()).filter(Boolean);
+  const chunks=[]; let cur='';
+  for (const p of paras){
+    if ((cur + '\n' + p).length > max){ if (cur) chunks.push(cur); cur=p; } else { cur += (cur?'\n':'') + p; }
+  }
+  if (cur) chunks.push(cur);
+  return chunks.length?chunks:[t.slice(0,max)];
+}
+</script>
+</body>
+</html>
