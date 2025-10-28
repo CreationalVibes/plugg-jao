@@ -2,7 +2,7 @@
 {
   "name": "Plugga enkelt",
   "short_name": "Frågor",
-  "start_url": ".",
+  "start_url": "/plugga-app/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#ffffff",
